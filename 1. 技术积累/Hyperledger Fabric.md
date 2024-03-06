@@ -380,6 +380,130 @@ sudo /etc/init.d/ssh start
 
 在测试网络中的任一节点上直接执行 `deployCC` 命令，可以直接安装智能合约，测试网络中共有三个节点，分别是属于 `Org1` 的 `peer1` 节点、属于 `Org2` 的 `peer2` 节点以及 `orderer` 节点，在linux环境中可以通过切换环境变量来控制当前操作哪一个节点（即在哪个节点上执行命令），基于此官网中还提供了另一种逐步安装智能合约的方式，下面为安装过程以及对命令相应的解释：
 
+1. 要先启动 `docker`， 但是注意wsl2中不能用systemctl来启动docker服务，要用service ,service也会启动失败，在windows中docker desktop中的setting=>Resouces=>WSL integration 选中用的系统，再打开Ubuntu就可以用sudo service start docker启动docker
+
+2. 对Go的一些通用性配置
+
+   ```bash
+   # 1. 环境变量配置代理地址
+   GOPROXY=https://goproxy.io,direct
+   # 2. 打开mod
+   sudo GO111MODULE=on
+   go mod init # 创建go.mod文件管理依赖包
+   go mod tidy # 在go.mod文件中移除不需要的依赖包，执行后生成go.sum文件（依赖下载条目）
+   go mod verify # 检查当前模块依赖是否都被下载
+   go mod vendor # 生成vendor文件夹，存储具体的依赖包，使go程序能够在无网络环境下运行
+   ```
+
+3. 进入环境
+
+   ```bash
+   cd ../../test-network
+   export PATH=${PWD}/../bin:$PATH
+   export FABRIC_CFG_PATH=$PWD/../config/
+   ```
+
+4. 第一步：Package 打包chaincode为压缩包, 压缩包名称basic.tar.gz，被压缩的chaincode的path，lang为chaincode的编程语言，label为chaincode版本号
+
+   ```bash
+   peer lifecycle chaincode package basic.tar.gz --path ../asset-transfer-basic/chaincode-go/ --lang golang --label basic_1.0
+   # 上述命令可以将链码打包成basic.tar.gz
+   # 接下来需要将打包后的链码部署到所有需要背书的组织相关的peer上
+   ```
+
+5. 第二步：Install 在test-network中是通过切换环境变量至peer0.org1再切换至peer0.org2，表示在该各个peer上安装chaincode
+
+   ```bash
+   # Org1MSP install chaincode
+   export PATH=${PWD}/../bin:$PATH
+   export FABRIC_CFG_PATH=$PWD/../config/
+   export CORE_PEER_TLS_ENABLED=true
+   export CORE_PEER_LOCALMSPID="Org1MSP"
+   export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+   export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
+   export CORE_PEER_ADDRESS=localhost:7051
+   # 这里可以领悟到在测试网络中操作peer的方式是通过控制PATH环境变量来切换
+   peer lifecycle chaincode install basic.tar.gz
+   # 这里发现又出现了msp不存在的情况，但是无法用曾经的手段解决
+   # 发现这里的原因是需要重新启动网络 ./network.sh up 再建立一下channel(不清楚是否必要) 这样就可以成功执行 成功submitInstallProposal
+   ```
+
+   ```bash
+   #接下来在Org2MSP chaincode
+   export CORE_PEER_LOCALMSPID="Org2MSP"
+   export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt
+   export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp
+   export CORE_PEER_ADDRESS=localhost:9051
+   # 再次安装
+   peer lifecycle chaincode install basic.tar.gz
+   ```
+
+6. 第三步：Query 可查询是否已经在当前peer上安装chaincode，已安装则会输出CC Package ID
+
+   ```bash
+   # 接下来通过packageID来控制在peer上install的chaincode
+   # 可以通过下面的命令查看在peer上安装的chaincode的packageID
+   peer lifecycle chaincode queryinstalled
+   ```
+
+7. 第四步：approveformyorg 涉及大量参数，每个安装了chaincode的peer需要执行命令提交同意，这里在test-network中每个Org只有一个peer,故只要该peer同意就表示Org同意，若有多个peer，需执行多次，这一步开始都需要提供ordeer的msp中的tlsca证书
+
+   ```bash
+   # 先对Org2进行操作
+   export CC_PACKAGE_ID=basic_1.0:69b8a2e2397a9d80e59b51b2ec71cb523f064ea5b184336a413b5ea876a957c1
+   # 执行以下命令使Org2 approve chaincode , approve操作是以组织为单位的，Org2中的一个peer运行了该命令，其他peer也都会通过分布式系统的gossip approve这个chaincode
+   peer lifecycle chaincode approveformyorg -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --channelID mychannel --name basic --version 1.0 --package-id $CC_PACKAGE_ID --sequence 1 --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
+   # sequence 1 表示该chaincode被定义或被更新的次数总和
+   # approveformyorg 还可以加参数 --signature-policy , --channel-config-policy 
+   # endorsement policy可以更改这里的配置
+   
+   # 之后切换PATH到Org1，再次执行 approveformyorg 
+   
+   # approve操作 返回了一个txid 这说明peer安装了chaincode并approve这个智能合约也会提交一个tx给Order，因为这样才能将某Org同意了该chaincode的信息传递给其他Org
+   ```
+
+8. 第五步：checkcommitreadiness 查看各Org approve状态
+
+   ```bash
+   # 可以在某个peer上运行该命令 checkcommitreadiness 来查看各Org 对 chaincode 的同意情况
+   peer lifecycle chaincode checkcommitreadiness --channelID mychannel --name basic --version 1.0 --sequence 1 --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" --output json
+   ```
+
+9. 第六步：commit 当check中的结果全部为true，则任意Org中的任意Peer可以执行commit，注册chaincode至channel,之后chaincode便可以被调用，commit时需要peer的ca证书
+
+    ```bash
+    # 同意数达到了defination的要求， 则任一Org中的某个Peer可以commit该chaincode to channel
+    peer lifecycle chaincode commit -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --channelID mychannel --name basic --version 1.0 --sequence 1 --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt" --peerAddresses localhost:9051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
+    ```
+
+10. 第七步：querycommitted 查询commit结果
+
+    ```bash
+    # chaincode defination的上述背书，被channel members提交给Order，Order将该TX放进block分发给channel中的peers,交给peers进行Validation
+    # 上述执行的commit命令会等待Validation的结果，可以通过querycommitted命令查询Validation结果
+    peer lifecycle chaincode querycommitted --channelID mychannel --name basic --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
+    ```
+
+11. 第八步：invoke 调用chaincode
+
+    ```bash
+    # 现在chaincode等待被client applications invoke
+    peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n basic --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt" --peerAddresses localhost:9051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt" -c '{"function":"InitLedger","Args":[]}'
+```
+
+12. 第九步：query 查询某个channel中某个智能合约的账本，以下是基于asset-transfer-basic的例子
+
+    ```bash
+    # query Assets
+    peer chaincode query -C mychannel -n basic -c '{"Args":["GetAllAssets"]}'
+    ```
+
+***到这里相当于拆解了一开始 deployCC命令中打包起来的部署智能合约的具体过程***
+
+
+
+## 通过命令行调用Chaincode
+
 ```bash
 export PATH=${PWD}/../bin:$PATH
 export FABRIC_CFG_PATH=$PWD/../config/
@@ -388,7 +512,7 @@ export CORE_PEER_LOCALMSPID="Org1MSP"
 export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
 export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
 export CORE_PEER_ADDRESS=localhost:7051
-# 教程中的该命令有误 
+ 
 peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n basic --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt" --peerAddresses localhost:9051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt" -c '{"function":"InitLedger","Args":[]}'
 ```
 
@@ -400,10 +524,6 @@ peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.exa
 这个地方得通过切换为root再在root里声明环境变量，再invoke链码，这个之后我以为下一条命令peer chaincode query可以直接在普通用户中执行，但是还是会出现一样的MSP KeyMaterial not found in SigningIdentityInfo错误。
 
 解决方法跟上面一样，看来涉及到链码的operation都必须要在root用户下执行，应该是权限问题导致无法访问文件就会使得其误以为文件不存在，***直觉上认为可以通过修改org1.example.com/users/Admin@org1.example.com/msp这个文件夹的权限来解决该问题*** 该文件夹应该是由于涉及安全问题设置了较高权限
-
-
-
-wsl2中不能用systemctl来启动docker服务，要用service ,service也会启动失败，在windows中docker desktop中的setting=>Resouces=>WSL integration 选中用的系统，再打开Ubuntu就可以用sudo service start docker启动docker
 
 ```bash
 # 关闭之前的网络
@@ -441,85 +561,244 @@ peer chaincode query -C mychannel -n basic -c '{"Args":["ReadAsset","asset6"]}'
 
 
 
+## 通过编写程序访问智能合约
+
+在github中可以找到以下sdk，早期社区开发出了一系列**fabric-sdk-\***开发工具包，但是各自设计不同，最后社区在此前工具包基础上整合升级设计了**fabric-gateway**，该sdk不需要配置文件！对用户友好且功能完善！
+
+| fabric-sdk-go         | 需要通过org1下的connection-org1.yaml连接区块链网络      | 成功     |
+| --------------------- | ------------------------------------------------------- | -------- |
+| **fabric-sdk-py**     | 需要network.json连接区块链网络                          | 失败     |
+| **fabric-sdk-java**   |                                                         | 未尝试   |
+| **fabric-sdk-nodejs** |                                                         | 未尝试   |
+| **fabric-gateway**    | 目前最好用的sdk，功能完善且易使用，***不需要配置文件*** | **成功** |
 
 
-```bash
-# 下载go.mod中定义的运行代码需要的相关依赖到vendor文件夹中
-# 使其在无网络环境下也可也运行
-sudo GO111MODULE=on go mod vendor
-cd ../../test-network
-export PATH=${PWD}/../bin:$PATH
-export FABRIC_CFG_PATH=$PWD/../config/
-peer lifecycle chaincode package basic.tar.gz --path ../asset-transfer-basic/chaincode-go/ --lang golang --label basic_1.0
-# 上述操作可以将链码打包成basic.tar.gz
-# 接下来需要将打包后的链码部署到所有需要背书的组织相关的peer上
-export PATH=${PWD}/../bin:$PATH
-export FABRIC_CFG_PATH=$PWD/../config/
-export CORE_PEER_TLS_ENABLED=true
-export CORE_PEER_LOCALMSPID="Org1MSP"
-export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
-export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
-export CORE_PEER_ADDRESS=localhost:7051
-# 这里可以领悟到在测试网络中操作peer的方式是通过控制PATH环境变量来切换
-peer lifecycle chaincode install basic.tar.gz
-# 这里发现又出现了msp不存在的情况，但是无法用曾经的手段解决
-# 发现这里的原因是需要重新启动网络 ./network.sh up 再建立一下channel(不清楚是否必要) 这样就可以成功执行 成功submitInstallProposal
 
-#接下来在Org2上面安装chaincode
-export CORE_PEER_LOCALMSPID="Org2MSP"
-export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt
-export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org2.example.com/users/Admin@org2.example.com/msp
-export CORE_PEER_ADDRESS=localhost:9051
-# 再次安装
-peer lifecycle chaincode install basic.tar.gz
+### 方式一：fabric-sdk-go
 
-# 接下来通过packageID来控制在peer上install的chaincode
-# 可以通过下面的命令查看在peer上安装的chaincode的packageID
-peer lifecycle chaincode queryinstalled
+```go
+// 示例代码
+// fabric-sdk-go 依赖包，由于是在github上，故执行go mod vendor获取依赖包时会出现访问超时问题，可以通过先ping github.com，再执行相关命令的方式解决
+import (
+        "fmt"
+        "log"
+        "os"
+        "path/filepath"
+        "github.com/hyperledger/fabric-sdk-go/pkg/core/config"
+        "github.com/hyperledger/fabric-sdk-go/pkg/gateway"
+)
 
-# 先对Org2进行操作
-export CC_PACKAGE_ID=basic_1.0:69b8a2e2397a9d80e59b51b2ec71cb523f064ea5b184336a413b5ea876a957c1
-# 执行以下命令使Org2 approve chaincode , approve操作是以组织为单位的，Org2中的一个peer运行了该命令，其他peer也都会通过分布式系统的gossip approve这个chaincode
-peer lifecycle chaincode approveformyorg -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --channelID mychannel --name basic --version 1.0 --package-id $CC_PACKAGE_ID --sequence 1 --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
-# sequence 1 表示该chaincode被定义或被更新的次数总和
-# approveformyorg 还可以加参数 --signature-policy , --channel-config-policy 
-# endorsement policy可以更改这里的配置
+func main() {
+    // 声明环境变量，后续用到了"CHANNEL_NAME"，"CHAINCODE_NAME"
+    err := os.Setenv("DISCOVERY_AS_LOCALHOST", "true")
+    if err != nil {
+            log.Fatalf("Error setting DISCOVERY_AS_LOCALHOST environment variable: %v", err)
+    }
+    // Gateway 如何连接至 test-network ?
+    ccpPath := filepath.Join(
+            "/home",
+            "zpwang",
+            "fabric",
+            "fabric-samples",
+            "test-network",
+            "organizations",
+            "peerOrganizations",
+            "org1.example.com",
+            "connection-org1.yaml",
+    )
+    
+    // wallet存在的意义还没有搞清楚
+    walletPath := "wallet"
+    // remove any existing wallet from prior runs
+    os.RemoveAll(walletPath)
+    wallet, err := gateway.NewFileSystemWallet(walletPath)
+    if err != nil {
+            log.Fatalf("Failed to create wallet: %v", err)
+    }
 
-# 之后切换PATH到Org1，再次执行 approveformyorg 
+    if !wallet.Exists("appUser") {
+            err = populateWallet(wallet)
+            if err != nil {
+                    log.Fatalf("Failed to populate wallet contents: %v", err)
+            }
+    }
+    // gateway通过org1的peer0的配置文件连接至peer0,再通过gateway连接network,本质是通过peer0作为桥梁访问整个network
+    gw, err := gateway.Connect(
+            gateway.WithConfig(config.FromFile(filepath.Clean(ccpPath))),
+            gateway.WithIdentity(wallet, "appUser"),
+    )
+    if err != nil {
+            log.Fatalf("Failed to connect to gateway: %v", err)
+    }
+    defer gw.Close()
+	
+    channelName := "mychannel"
+    if cname := os.Getenv("CHANNEL_NAME"); cname != "" {
+            channelName = cname
+    }
+	// gateway获取network实例
+    log.Println("--> Connecting to channel", channelName)
+    network, err := gw.GetNetwork(channelName)
+    if err != nil {
+            log.Fatalf("Failed to get network: %v", err)
+    }
+
+    chaincodeName := "basic"
+    if ccname := os.Getenv("CHAINCODE_NAME"); ccname != "" {
+            chaincodeName = ccname
+    }
+    // 从network中根据ccn获取chaincode实例
+    log.Println("--> Using chaincode", chaincodeName)
+    contract := network.GetContract(chaincodeName)
+    // 通过chaincode实例调用账本
+    // init
+    result, err := contract.SubmitTransaction("InitLedger")
+    if err != nil {
+            log.Fatalf("Failed to Submit transaction: %v", err)
+    }
+    log.Println(string(result))
+    // Create
+    log.Println("--> Submit Transaction: CreateRecord, creates new record with HashValue, Source, Time, StoreNodes, Operation arguments")
+    result, err = contract.SubmitTransaction("CreateRecord", "Qm001", "Rasperry001", "202310212042", "001,002", "add")
+    if err != nil {
+            log.Fatalf("Failed to Submit transaction: %v", err)
+    }
+    log.Println(string(result))
+    // GetAll
+    log.Println("--> Evaluate Transaction: GetAllRecords, function returns all the current assets on the ledger")
+    result, err = contract.EvaluateTransaction("GetAllRecords")
+    if err != nil {
+            log.Fatalf("Failed to evaluate transaction: %v", err)
+    }
+    log.Println(string(result))
+}
 ```
 
+### 方式二：fabric-gateway
 
+```go
+import (
+    "github.com/hyperledger/fabric-gateway/pkg/client"
+	"github.com/hyperledger/fabric-gateway/pkg/identity"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+)
 
-approve操作 返回了一个txid 这说明peer安装了chaincode并approve这个智能合约也会提交一个tx给Order，因为这样才能将某Org同意了该chaincode的信息传递给其他Org
+const (
+	mspID        = "Org1MSP"
+	cryptoPath   = "/home/zpwang/go/src/github.com/zipingw/fabric-samples/test-network/organizations/peerOrganizations/org1.example.com"
+	certPath     = cryptoPath + "/users/User1@org1.example.com/msp/signcerts/cert.pem"
+	keyPath      = cryptoPath + "/users/User1@org1.example.com/msp/keystore/"
+	tlsCertPath  = cryptoPath + "/peers/peer0.org1.example.com/tls/ca.crt"
+	peerEndpoint = "localhost:7051"
+	gatewayPeer  = "peer0.org1.example.com"
+)
+func main() {
+	var ccn = "vTree"
+	// The gRPC client connection should be shared by all Gateway connections to this endpoint
+	clientConnection := newGrpcConnection()
+	defer clientConnection.Close()
 
-```bash
-# 可以在某个peer上运行该命令 checkcommitreadiness 来查看各Org 对 chaincode 的同意情况
-peer lifecycle chaincode checkcommitreadiness --channelID mychannel --name basic --version 1.0 --sequence 1 --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" --output json
+	id := newIdentity()
+	sign := newSign()
+
+	// Create a Gateway connection for a specific client identity
+	gw, err := client.Connect(
+		id,
+		client.WithSign(sign),
+		client.WithClientConnection(clientConnection),
+		// Default timeouts for different gRPC calls
+		client.WithEvaluateTimeout(5*time.Second),
+		client.WithEndorseTimeout(15*time.Second),
+		client.WithSubmitTimeout(5*time.Second),
+		client.WithCommitStatusTimeout(1*time.Minute),
+	)
+	if err != nil {
+		panic(err)
+	}
+	defer gw.Close()
+
+	// Override default values for chaincode and channel name as they may differ in testing contexts.
+	chaincodeName := ccn
+	if ccname := os.Getenv("CHAINCODE_NAME"); ccname != "" {
+		chaincodeName = ccname
+	}
+
+	channelName := "mychannel"
+	if cname := os.Getenv("CHANNEL_NAME"); cname != "" {
+		channelName = cname
+	}
+
+	network := gw.GetNetwork(channelName)
+	contract := network.GetContract(chaincodeName)
+
+	// Context used for event listening
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+}
+func newGrpcConnection() *grpc.ClientConn {
+	certificate, err := loadCertificate(tlsCertPath)
+	if err != nil {
+		panic(err)
+	}
+
+	certPool := x509.NewCertPool()
+	certPool.AddCert(certificate)
+	transportCredentials := credentials.NewClientTLSFromCert(certPool, gatewayPeer)
+
+	connection, err := grpc.Dial(peerEndpoint, grpc.WithTransportCredentials(transportCredentials))
+	if err != nil {
+		panic(fmt.Errorf("failed to create gRPC connection: %w", err))
+	}
+
+	return connection
+}
+// newIdentity creates a client identity for this Gateway connection using an X.509 certificate.
+func newIdentity() *identity.X509Identity {
+	certificate, err := loadCertificate(certPath)
+	if err != nil {
+		panic(err)
+	}
+
+	id, err := identity.NewX509Identity(mspID, certificate)
+	if err != nil {
+		panic(err)
+	}
+
+	return id
+}
+
+func loadCertificate(filename string) (*x509.Certificate, error) {
+	certificatePEM, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read certificate file: %w", err)
+	}
+	return identity.CertificateFromPEM(certificatePEM)
+}
+
+// newSign creates a function that generates a digital signature from a message digest using a private key.
+func newSign() identity.Sign {
+	files, err := os.ReadDir(keyPath)
+	if err != nil {
+		panic(fmt.Errorf("failed to read private key directory: %w", err))
+	}
+	privateKeyPEM, err := os.ReadFile(path.Join(keyPath, files[0].Name()))
+
+	if err != nil {
+		panic(fmt.Errorf("failed to read private key file: %w", err))
+	}
+
+	privateKey, err := identity.PrivateKeyFromPEM(privateKeyPEM)
+	if err != nil {
+		panic(err)
+	}
+
+	sign, err := identity.NewPrivateKeySign(privateKey)
+	if err != nil {
+		panic(err)
+	}
+
+	return sign
+}
 ```
 
-
-
-```bash
-# 同意数达到了defination的要求， 则任一Org中的某个Peer可以commit该chaincode to channel
-peer lifecycle chaincode commit -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --channelID mychannel --name basic --version 1.0 --sequence 1 --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt" --peerAddresses localhost:9051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt"
-```
-
-
-
-```bash
-# chaincode defination的上述背书，被channel members提交给Order，Order将该TX放进block分发给channel中的peers,交给peers进行Validation
-# 上述执行的commit命令会等待Validation的结果，可以通过querycommitted命令查询Validation结果
-peer lifecycle chaincode querycommitted --channelID mychannel --name basic --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
-```
-
-
-
-```bash
-# 现在chaincode等待被client applications invoke
-peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n basic --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt" --peerAddresses localhost:9051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt" -c '{"function":"InitLedger","Args":[]}'
-
-# query Assets
-peer chaincode query -C mychannel -n basic -c '{"Args":["GetAllAssets"]}'
-```
-
-***到这里相当于拆解了一开始 deployCC命令中打包起来的部署智能合约的具体过程***
