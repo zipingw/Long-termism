@@ -9,7 +9,7 @@ sudo apt-get install sshd # Unable to locate package sshd
 # 安装 ssh
 sudo apt-get install openssh-server # succeed
 # 启动ssh服务
-sudo service ssh start
+sudo service ssh start # 或者是执行命令 sudo /etc/init.d/ssh start
 > * Starting OpenBSD Secure Shell server sshd                      [ OK ]
 # 查看ssh服务状态
 > * sshd is running  # 为什么启动了ssh但是sshd在running
@@ -37,7 +37,9 @@ ip address
 ```bash
 # 从WSL中的Ubuntu通过scp传文件给Windows
 # 先查看Windows用户名： 控制面板=>用户账户=>用户账户 王子平 Administrator
+# linux传至windows
 scp ./ipfscc.go administrator@192.168.137.1:/d:/ipfscc.go
-# failed
+# windows传至linux
+scp D:\file\install-fabric.sh zpw@192.168.209.133:/home/zpw/go/src/github.com/zipingw/
 ```
 
