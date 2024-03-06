@@ -1,23 +1,20 @@
+[TOC]
+
+
+
 # Go
 
-两种不同的定义变量方式，特点是`:=`只能用来定义变量，变量赋值时必须使用`=`
+## 配置代理
 
-```Go
-//方法一
-var a int
-var b []int
-//方法二
-a := 2
-b := []int
+```bash
+# 配置代理，依赖源 https://proxy.golang.org在国内无法访问
+echo "export GO111MODULE=on" >> ~/.profile
+echo "export GOPROXY=https://goproxy.cn" >> ~/.profile
+source ~/.profile
+# 或者可以不修改proxy 连接VPN再修改go mod tidy 的timeout时间
 ```
 
-定义struct
-
-```go
-type vertex struct{
-	x, y int
-}
-```
+## Slice
 
 slice 即切片，与python中lis切片操作类似，当定义array时，如果不定义长度，即`[]`，则此声明将定义slice而非array
 
@@ -104,7 +101,7 @@ func main() {
 }
 ```
 
-
+## func
 
 go取消了class的概念，而是采用method方式将 func绑定到type上，实际上type的定义就如同class的定义，method就是成员函数
 
