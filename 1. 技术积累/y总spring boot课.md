@@ -1,3 +1,7 @@
+[TOC]
+
+
+
 #  y总spring boot课
 
 - 基本类型
@@ -291,34 +295,112 @@ IDEA新建 `Spring Initializr`
 
   <img src="C:\Users\zpwang\Desktop\0_master\Long-termism\resources\img\SpringBoot后端项目创建14.png" style="zoom: 67%;" />
 
+- 前端通过下述代码通过`url`调用后端函数时, 会遇到跨域问题, 因为`SpringBoot`在域名`127.0.0.1:3000`而前端在`127.0.0.1:8080`
+
+  ```vue
+  <template>
+    <div>
+        <div>
+            Bot昵称:{{ bot_name }}
+      </div>
+        <div>
+            Bot战力:{{ bot_rating}}
+      </div>
+      </div>
+  	<router-view></router-view>
+  </template>
+  
+  <script>
+  import $ from 'jqeury';
+  import { ref } from 'vue';
+  
+  export default {
+    name: "App",
+      setup: () => {
+          let bot_name = ref("");
+          let bot_rating = ref("");
+          $.ajax({
+              url: "http://127.0.0.1:3000/pk/geetbotinfo/",
+          });
+          return {
+              bot_name,
+              bot_rating
+          }
+      }
+  }
+  </script>
+  <style>
+  </style>
+  ```
+
+  <img src="C:\Users\zpwang\Desktop\0_master\Long-termism\resources\img\SpringBoot后端项目创建15.png" style="zoom:60%;" />
+
+- 在`backend`中创建`config`包并创建`CorsConfig`类, 并在其中填入下述代码即可
+
+  ```java
+  package com.kob.backend.config;
+  
+  import org.springframework.context.annotation.Configuration;
+  
+  import jakarta.servlet.*;
+  import jakarta.servlet.http.HttpServletRequest;
+  import jakarta.servlet.http.HttpServletResponse;
+  import java.io.IOException;
+  
+  @Configuration
+  public class CorsConfig implements Filter {
+      @Override
+      public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain) throws IOException, ServletException {
+          HttpServletResponse response = (HttpServletResponse) res;
+          HttpServletRequest request = (HttpServletRequest) req;
+  
+          String origin = request.getHeader("Origin");
+          if(origin!=null) {
+              response.setHeader("Access-Control-Allow-Origin", origin);
+          }
+  
+          String headers = request.getHeader("Access-Control-Request-Headers");
+          if(headers!=null) {
+              response.setHeader("Access-Control-Allow-Headers", headers);
+              response.setHeader("Access-Control-Expose-Headers", headers);
+          }
+  
+          response.setHeader("Access-Control-Allow-Methods", "*");
+          response.setHeader("Access-Control-Max-Age", "3600");
+          response.setHeader("Access-Control-Allow-Credentials", "true");
+  
+          chain.doFilter(request, response);
+      }
+  
+      @Override
+      public void init(FilterConfig filterConfig) {
+  
+      }
+  
+      @Override
+      public void destroy() {
+      }
+  }
+  ```
+
 ### 前端界面
 
 - web项目
-
   - 需要安装的插件: vue-router, vuex
   - 需要安装的依赖: jquery, bootstrap
   - 任务-serve-运行-输出 打开对应网址
-
 - acapp项目
-
   - 需要安装的插件: vuex
   - 需要安装的依赖: 无
   - 任务-serve-运行-输出 打开对应网址
-
 - 去掉router/index.js中首行的中`createWebHashHistory`中的`Hash` 以及下方的另一个`Hash`,目的是为了去掉链接中的"#"符号
-
 - 安装Vue3的过程
-
   - [Vue3官网](https://vuejs.org/)
   - [安装Nodejs](https://nodejs.org/en/)
   - 打开PowerShell 或者 Gitbash执行`npm i -g @vue/cli`
   - 启动vue自带的图形化项目管理界面 `vue ui` 
   - 常见问题1：Windows上运行vue，提示无法加载文件，表示用户权限不足。
     解决方案：用管理员身份打开终端，输入set-ExecutionPolicy RemoteSigned，然后输入y
-
-  
-
-
 
 ## Vue前端设计
 
@@ -568,4 +650,275 @@ IDEA新建 `Spring Initializr`
     </li>
     ```
 
-    
+### 对战地图
+
+1. 在`assets`目录中建两个文件夹`iamges`和`scripts`，将背景图片放入前者，并在后者中新建`AcGameObject.js`实现游戏对象基类，其中包含下面一些元素
+
+   - `start`执行一次动作
+   - `update`每帧更新一次
+   - `on_destroy`删除之前执行
+   - `destroy`删除时动作
+
+   ```js
+   const AC_GAME_OBJECTS = [];
+   
+   export class AcGameObject {
+       constructor() {
+           AC_GAME_OBJECTS.push(this);
+           this.has_call_start = false;
+           this.timedelta = 0; // 用于计算物体移动速度
+       }
+       start() { // 只执行一次
+       }
+       update() { // 每一帧执行一次
+       }
+       on_destroy() { // 删除之前执行
+       }
+       destroy() {
+           this.on_destroy();
+   		// 回收每个对象
+           for (let i in AC_GAME_OBJECTS) {
+               const obj = AC_GAME_OBJECTS[i];
+               if(obj === this) {
+                   AC_GAME_OBJECTS.splice(i); //splice用于回收
+                   break;
+               }
+           }   
+       }
+   }
+   let last_timestamp; //上一次执行的时刻
+   // 这段看不太懂...抄就完了
+   const step = timestamp => {
+       for (let obj of AC_GAME_OBJECTS) {
+           if(!obj.has_call_start) {
+               obj.has_call_start = true;
+               obj.start();
+           } else {
+               obj.timedelta = timestamp - last_timestamp;
+               obj.update();
+           }
+       }
+       last_timestamp = timestamp;
+       requestAnimationFrame(step)
+   }
+   requestAnimationFrame(step)
+   ```
+
+2. 对战地图中需要实现两个类，分别是地图和墙，每一帧都要重新渲染这两个对象，首先实现地图类，在`assets/scripts`中创建`GameMap.js`实现地图类，这个`js`脚本文件继承于`AcGameObject`基类，
+
+   ```js
+   import { AcGameObject } from "./AcGameObject";
+   import { Wall } from "./Wall";
+   export class GameMap extends AcGameObject {
+       constructor(ctx, parent) { // 参数为画布和画布父元素，后者用于动态修改画布长宽
+           super();
+           this.ctx = ctx;
+           this.parent = parent;
+           this.L = 0;
+           this.rows = 13;
+           this.cols = 13;
+           this.inner_walls_count = 20;
+           this.walls = [];
+       }
+       check_connectivity(g, sx, sy, tx, ty) {
+           if(sx == tx && sy == ty)return true;
+           g[sx][sy] = true;
+   
+           let dx = [-1, 0, 1, 0], dy = [0, 1, 0, -1];
+           for(let i = 0; i < 4; i++) {
+               let x = sx + dx[i], y = sy + dy[i];
+               if (!g[x][y] && this.check_connectivity(g, x, y, tx, ty)){
+                   return true;
+               }
+           }
+           return false;
+       } 
+       create_walls () {
+           const g = [];
+           for(let r = 0; r < this.rows; r++){
+               g[r] = [];
+               for(let c = 0; c < this.cols; c++){
+                   g[r][c] = false;
+               }
+           }
+           for(let r = 0; r < this.rows; r++){
+               g[r][0] = g[r][this.cols - 1] = true;
+           }
+           for(let c = 0; c < this.cols; c++){
+               g[0][c] = g[this.rows - 1][c] = true;
+           }
+           // 创建随机障碍物 
+           for(let i = 0; i < this.inner_walls_count / 2; i++){
+               for(let j = 0; j < 1000; j++){
+                   let r = parseInt(Math.random() * this.rows);
+                   let c = parseInt(Math.random() * this.cols);
+                   if(g[r][c] || g[c][r])continue;
+                   if(r == this.rows - 2 && c == 1 || r == 1 && c == this.cols - 2)continue;
+                   g[r][c] = g[c][r] = true;
+                   break;
+               }
+           }
+           // 深度复制 g
+           const copy_g = JSON.parse(JSON.stringify(g));
+           if(!this.check_connectivity(copy_g, this.rows - 2, 1, 1, this.cols - 2)) return false;
+           for(let r = 0; r < this.rows; r++){
+               for(let c = 0; c < this.cols; c++){
+                   if(g[r][c])this.walls.push(new Wall(r, c, this));
+               }
+           }      
+           return true;
+       }
+       start() {
+           for(let i = 0; i < 1000; i++){
+               if(this.create_walls()){
+                   break;
+               }
+           }
+       }
+       update_size() {
+           this.L = parseInt(Math.min(this.parent.clientWidth / this.cols, this.parent.clientHeight / this.rows));
+           this.ctx.canvas.width = this.L * this.cols;
+           this.ctx.canvas.height = this.L * this.rows;
+       }
+       update() {
+           this.update_size();
+           this.render();
+       }
+       // 作图
+       render() {
+           const color_even = "#AAD751", color_odd = "#A2D149";
+           for(let r = 0; r < this.rows; r++){
+               for(let c = 0; c < this.cols; c++){
+                   if((r + c) % 2 == 1){
+                       this.ctx.fillStyle = color_even;
+                   }
+                   else {
+                       this.ctx.fillStyle = color_odd;
+                   }
+                   this.ctx.fillRect(this.L * c, this.L * r, this.L, this.L);
+               }
+           }
+       }
+   }
+   ```
+
+3. `assets/scripts`中创建`Wall.js`实现障碍物类，用于作为`GameMap`中的障碍物填充
+
+   ```js
+   import { AcGameObject } from "./AcGameObject";
+   
+   export class Wall extends AcGameObject {
+       constructor(r, c, gamemap) {
+           super();
+           this.c = c;
+           this.r = r;
+           this.gamemap = gamemap;
+           this.color = "#B37226";
+       }
+       update () {
+           this.render();
+       }
+       // 渲染单点元素
+       render () {
+           const L = this.gamemap.L;
+           const ctx = this.gamemap.ctx;
+           ctx.fillStyle = this.color;
+           ctx.fillRect(this.c * L, this.r * L, L, L);
+       }
+   }
+   ```
+
+4. 在`components`中创建`PlayGround.vue`组件，作为`pk`页面中的底子，在`PkIndexView.vue`中添加如下代码使用`PlayGround`组件：
+
+   ```vue
+   <template>
+       <PlayGround />
+   
+   </template>
+   
+   <script>
+   import PlayGround from '@/components/PlayGround.vue'
+   
+   export default {
+       components: {
+           PlayGround
+       }
+   }
+   </script>
+   
+   <style scoped>
+   
+   </style>
+   ```
+
+5. `PlayGround`组件的代码如下所示，定义了位置信息调用`GameMap`组件
+
+   ```vue
+   <template>
+       <div class="playground">
+           <GameMap>
+           </GameMap>
+       </div>
+   </template>
+   
+   <script>
+   import GameMap from './GameMap.vue';
+   export default {
+       components: {
+           GameMap,
+       }
+   }
+   </script>
+   
+   <style scoped>
+   div.playground {
+       width: 60vw;
+       height: 80vh;
+       margin: 40px auto;
+   }
+   </style>
+   ```
+
+6. 在`components`中创建`GameMap.vue`组件，引用`GameMap.js`并创建实例
+
+   ```vue
+   <template>
+       <div ref="parent" class="gamemap">
+           <canvas ref="canvas"></canvas>
+       </div>
+   </template>
+   
+   <script>
+   import { GameMap } from '@/assets/scripts/GameMap.js'
+   import { ref, onMounted } from 'vue'
+   export default {
+   
+       setup() {
+           let parent = ref(null);
+           let canvas = ref(null);
+           
+           onMounted(() => {
+               new GameMap(canvas.value.getContext('2d'), parent.value)
+           });
+   
+           return {
+               parent,
+               canvas
+           }
+       }
+   }
+   
+   </script>
+   
+   <style scoped>
+   div.gamemap {
+       width: 100%;
+       height: 100%;
+       display: flex;  
+       justify-content: center;
+       align-content: center;
+   }
+   </style>
+   ```
+
+7. 最后将`web/public/`目录下的`favicon.ico`替换为网络图标，至此`pk`网页雏形搭建完毕
