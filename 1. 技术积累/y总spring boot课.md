@@ -401,6 +401,7 @@ IDEA新建 `Spring Initializr`
   - 启动vue自带的图形化项目管理界面 `vue ui` 
   - 常见问题1：Windows上运行vue，提示无法加载文件，表示用户权限不足。
     解决方案：用管理员身份打开终端，输入set-ExecutionPolicy RemoteSigned，然后输入y
+  - 常见问题2：在新的系统中`git clone`项目之后，在`vue ui`中导入项目之前需要进入项目所在文件夹执行`npm install`命令
 
 ## Vue前端设计
 
@@ -922,3 +923,102 @@ IDEA新建 `Spring Initializr`
    ```
 
 7. 最后将`web/public/`目录下的`favicon.ico`替换为网络图标，至此`pk`网页雏形搭建完毕
+
+## MySQL安装
+
+- 安装完成将`/MySQL/MySQL Server 8.0/bin`添加到环境变量中
+- 运行`mysql --version`验证安装是否完成
+- 以管理员权限启动`PowerShell`通过`net stop mysql80`和`net start mysql80`来关闭和启动`mysql`
+- `mysql -uroot -p`输入密码后登录,or`mysql -uroot -p123456`直接命令中跟密码（不安全）
+  - `show databases;`
+  - `create database kob;`
+  - `use kob;`  // 进入数据库
+  - `show tables;`
+  - `drop database kob;`
+  - `create table user(id int, username varchar(100), password varchar(100));`
+  - `show tables;`  // 所有table
+  - `drop table user;`
+  - `insert into user values(1, 'wzp', 'pwzp')`
+  - `select * from user;`
+  - `select * from user where id=1;`
+  - `delete * from user where id=2;`
+  - `exit`or`quit`退出
+
+### 如何让Spring后端操作MySQL
+
+- IDEA 中右上角点击数据库符号，按步骤载入即可
+
+- Spring中要调用数据库首先需要载入一些**依赖**
+
+  - 到网站[Maven仓库地址](https://mvnrepository.com/)中搜索复制即可，`maven`和`gradle`都有，添加后在IDEA中刷新加载
+
+    ```bash
+    Spring Boot Starter JDBC
+    Project Lombok
+    MySQL Connector/J
+    mybatis-plus-boot-starter
+    mybatis-plus-generator
+    spring-boot-starter-security
+    jjwt-api
+    jjwt-impl
+    jjwt-jackson
+    ```
+
+- Spring调用数据库实现业务逻辑的分层结构
+
+  - `pojo`层：向下连接数据库层，将数据库中的`table`转为`Java`中`Class`
+  - `mapper`层：将`pojo`层中`Class`中的操作映射为`sql`语句
+  - `service`层：作为实现业务逻辑的基本单元，对`mapper`层操作进行组合
+  - `controller`层：负责请求转发，接受前端页面`url`传入的参数，分发任务给`Service`层
+
+- 故整体项目结构大致如下：
+
+  - `backend`
+    - `config`
+    - `pojo`
+    - `mapper`
+    - `service`
+    - `controller`
+
+- 实现`pojo`层：创建`Class`命名为数据库`table`名称`User`(大小写好像无所谓？) 在其中写入以下内容：其中通过三个`@`可以快速实现机械重复的基础类函数的编写
+
+  ```java
+  package com.kob.backend.pojo;
+  
+  import lombok.AllArgsConstructor;
+  import lombok.Data;
+  import lombok.NoArgsConstructor;
+  
+  @Data
+  @NoArgsConstructor
+  @AllArgsConstructor
+  public class User {
+      private Integer id;
+      private String username;
+      private String password;
+  }
+  ```
+
+- 实现`mapper`层(为何为`interface`?)：
+
+  ```java
+  package com.kob.backend.mapper;
+  
+  import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+  import com.kob.backend.pojo.User;
+  import org.apache.ibatis.annotations.Mapper;
+  
+  @Mapper
+  public interface UserMapper extends BaseMapper<User> {
+      // 这里只需要定义接口
+      // 接口由Mybatisplus实现好了，直接调用
+  }
+  ```
+
+- 实现`service`层
+- 实现`controller`层
+  - 目录结构分为四个包，分别对应前端的四个页面`pk`、`user`、`record`、`ranklist`
+  - 以`user`为例，在`user`包中创建`UserController`类
+    - 在类定义的外面加上注解`@RestController`
+    - 在内容加注解`RequestMapping` or `GetMapping` or `PostMapping`，并定义函数`public List<User> getAll()`，这里的`User`即为`pojo`中定义的类，该函数希望将所有用户作为列表返回
+    - 如何返回？调用`Mapper`层，
