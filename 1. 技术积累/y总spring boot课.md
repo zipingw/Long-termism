@@ -958,11 +958,16 @@ IDEA新建 `Spring Initializr`
     MySQL Connector/J
     mybatis-plus-boot-starter
     mybatis-plus-generator
+    # Mybatis依赖传递的直接依赖中有个mybatis-spring 默认版本2.1.2 若使用springboot3.0以上版本会导致不适配
+    mybatis-spring 3.0.3 #需要额外添加高版本依赖，否则启动项目时报错
+    
     spring-boot-starter-security
     jjwt-api
     jjwt-impl
     jjwt-jackson
     ```
+
+  - 依赖问题参考[MyBatisPlus使用时报错Invalid value type for attribute ‘factoryBeanObjectType‘](https://blog.csdn.net/lonely__snow/article/details/134897066) [原因分析](https://github.com/mybatis/spring/pull/865)
 
 - Spring调用数据库实现业务逻辑的分层结构
 
@@ -1016,9 +1021,64 @@ IDEA新建 `Spring Initializr`
   ```
 
 - 实现`service`层
+
 - 实现`controller`层
   - 目录结构分为四个包，分别对应前端的四个页面`pk`、`user`、`record`、`ranklist`
+
   - 以`user`为例，在`user`包中创建`UserController`类
     - 在类定义的外面加上注解`@RestController`
+    
     - 在内容加注解`RequestMapping` or `GetMapping` or `PostMapping`，并定义函数`public List<User> getAll()`，这里的`User`即为`pojo`中定义的类，该函数希望将所有用户作为列表返回
-    - 如何返回？调用`Mapper`层，
+    
+    - 如何返回？调用`Mapper`层
+    
+      ```java
+      package com.kob.backend.controller.user;
+      
+      import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+      import com.kob.backend.pojo.User;
+      import com.kob.backend.mapper.UserMapper;
+      import org.springframework.beans.factory.annotation.Autowired;
+      import org.springframework.web.bind.annotation.GetMapping;
+      import org.springframework.web.bind.annotation.PathVariable;
+      import org.springframework.web.bind.annotation.RestController;
+      
+      import java.util.List;
+      
+      
+      @RestController
+      public class UserController {
+      
+          @Autowired
+          UserMapper userMapper;
+      
+          @GetMapping("/user/all/")
+          public List<User> getAll() {
+              return userMapper.selectList(null);
+          }
+      
+          @GetMapping("/user/{userId}")
+          public User getuser(@PathVariable int userId){
+              QueryWrapper<User> queryWrapper = new QueryWrapper<>();
+              queryWrapper.eq("id", userId);
+              return userMapper.selectOne(queryWrapper);
+          }
+      
+          @GetMapping("/user/add/{userId}/{username}/{password}/")
+          public String addUser(@PathVariable int userId,
+                                @PathVariable String username,
+                                @PathVariable String password) {
+              User user = new User(userId, username, password);
+              userMapper.insert(user);
+              return "Add User Successfully";
+          }
+      
+          @GetMapping("/user/delete/{userId}/")
+          public String deleteUser(@PathVariable int userId){
+              userMapper.deleteById(userId);
+              return "Delete User Successfully";
+          }
+      }
+      ```
+
+- 实现`Security`目前任何人都可以访问网页操作数据库，我们希望只有登录后才允许操作，添加依赖`spring-boot-starter-security`，现在再访问网页时就会弹出登录界面，该界面由`Security`实现，默认用户名为`user`，默认密码在启动`Springboot`时输出的命令行中，在`Service`子目录下添加`impl`，再new一个class为`UserDetailServiceImpl`，并令其实现接口`UserDetailService`用于接入数据库信息
