@@ -1,7 +1,5 @@
 [TOC]
 
-
-
 #  y总spring boot课
 
 - 基本类型
@@ -938,7 +936,7 @@ IDEA新建 `Spring Initializr`
   - `create table user(id int, username varchar(100), password varchar(100));`
   - `show tables;`  // 所有table
   - `drop table user;`
-  - `insert into user values(1, 'wzp', 'pwzp')`
+  - `insert into user values(1, 'wzp', 'pwzp');`
   - `select * from user;`
   - `select * from user where id=1;`
   - `delete * from user where id=2;`
@@ -968,6 +966,17 @@ IDEA新建 `Spring Initializr`
     ```
 
   - 依赖问题参考[MyBatisPlus使用时报错Invalid value type for attribute ‘factoryBeanObjectType‘](https://blog.csdn.net/lonely__snow/article/details/134897066) [原因分析](https://github.com/mybatis/spring/pull/865)
+
+- 在`resources`中的`application.properties`中添加以下信息：
+
+  ```properties
+  server.port=3001
+  
+  spring.datasource.username=root
+  spring.datasource.password=Xwzp581012
+  spring.datasource.url=jdbc:mysql://localhost:3306/kob?serverTimezone=Asia/Shanghai&useUnicode=true&characterEncoding=utf-8
+  spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
+  ```
 
 - Spring调用数据库实现业务逻辑的分层结构
 
@@ -1081,4 +1090,157 @@ IDEA新建 `Spring Initializr`
       }
       ```
 
-- 实现`Security`目前任何人都可以访问网页操作数据库，我们希望只有登录后才允许操作，添加依赖`spring-boot-starter-security`，现在再访问网页时就会弹出登录界面，该界面由`Security`实现，默认用户名为`user`，默认密码在启动`Springboot`时输出的命令行中，在`Service`子目录下添加`impl`，再new一个class为`UserDetailServiceImpl`，并令其实现接口`UserDetailService`用于接入数据库信息
+- 实现`Security`目前任何人都可以访问网页操作数据库，我们希望只有登录后才允许操作，添加依赖`spring-boot-starter-security`，该依赖添加后再启动主程序通过`url`调用时就会弹出登录界面，该界面由`Security`实现，默认用户名为`user`，默认密码在启动`Springboot`时输出的命令行中，在`Service`子目录下添加`impl`，再new一个class为`UserDetailServiceImpl`，并令其实现接口`UserDetailService`用于接入数据库信息
+
+  ```java
+  package com.kob.backend.service.impl;
+  
+  import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+  import com.kob.backend.pojo.User;
+  import com.kob.backend.mapper.UserMapper;
+  import com.kob.backend.service.impl.utils.UserDetailsImpl;
+  import org.springframework.beans.factory.annotation.Autowired;
+  import org.springframework.security.core.userdetails.UserDetails;
+  import org.springframework.security.core.userdetails.UserDetailsService;
+  import org.springframework.security.core.userdetails.UsernameNotFoundException;
+  import org.springframework.stereotype.Service;
+  
+  @Service
+  public class UserDetailServiceImpl implements UserDetailsService {
+  
+      @Autowired
+      UserMapper userMapper;
+  
+      @Override
+      public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+          QueryWrapper<User> queryWrapper = new QueryWrapper<>();
+          queryWrapper.eq("username", username);
+          User user = userMapper.selectOne(queryWrapper);
+          if(user == null) {
+              throw new RuntimeException("用户不存在");
+          }
+          return new UserDetailsImpl(user);
+      }
+  }
+  ```
+
+- 在`impl`中还需要新建一个包`utils`，在其目录下新建类`UserDetailsImpl`，并在其中加入以下内容，这里需要修改`Account`的一些权限默认值：
+
+  ```java
+  package com.kob.backend.service.impl.utils;
+  
+  import lombok.AllArgsConstructor;
+  import lombok.Data;
+  import lombok.NoArgsConstructor;
+  import org.springframework.security.core.GrantedAuthority;
+  import com.kob.backend.pojo.User;
+  import org.springframework.security.core.userdetails.UserDetails;
+  
+  import java.util.Collection;
+  
+  @Data
+  @NoArgsConstructor
+  @AllArgsConstructor
+  public class UserDetailsImpl implements UserDetails {
+  
+      private User user;
+  
+      @Override
+      public Collection<? extends GrantedAuthority> getAuthorities() {
+          return null;
+      }
+  
+      @Override
+      public String getPassword() {
+          return user.getPassword();
+      }
+  
+      @Override
+      public String getUsername() {
+          return user.getUsername();
+      }
+  
+      @Override
+      public boolean isAccountNonExpired() {
+          return true;
+      }
+  
+      @Override
+      public boolean isAccountNonLocked() {
+          return true;
+      }
+  
+      @Override
+      public boolean isCredentialsNonExpired() {
+          return true;
+      }
+  
+      @Override
+      public boolean isEnabled() {
+          return true;
+      }
+  }
+  ```
+
+- 但目前登录输入密码会失败，原因是缺少加密模块，在`config`包中新建类`SecurityConfig`，并在其中加入以下内容：
+
+  ```java
+  package com.kob.backend.config;
+  
+  import org.springframework.context.annotation.Bean;
+  import org.springframework.context.annotation.Configuration;
+  import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+  import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+  import org.springframework.security.crypto.password.PasswordEncoder;
+  
+  @Configuration
+  @EnableWebSecurity
+  public class SecurityConfig {
+  
+      @Bean
+      public PasswordEncoder passwordEncoder() {
+          return new BCryptPasswordEncoder();
+      }
+  }
+
+- 在`Test`中的`BackendApplicationTests`中写入
+
+  ```java
+  package com.kob.backend;
+  
+  import org.junit.jupiter.api.Test;
+  import org.springframework.boot.test.context.SpringBootTest;
+  import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+  import org.springframework.security.crypto.password.PasswordEncoder;
+  
+  @SpringBootTest
+  class BackendApplicationTests {
+      @Test
+      void contextLoads() {
+          PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+          System.out.println(passwordEncoder.encode("pwzp"));
+          //System.out.println(passwordEncoder.matches("pwzp", "$2a$10$XOLMwJOUWG1dxAWqUXsT4u/rYdVbSHjsIPLJI4AVrfu1MiYRoiXpK"));
+      }
+  }
+  ```
+
+- 将输出得到的`password`对应的密文替代数据库表中的密码字段，之后便可正常输入`pwzp`进行登录，幕后发生的事情是在`config`中添加了`SecurityConfig`字段之后在`spring-boot-starter-security`依赖中的登录界面里输入密码后，密码会自动经过编码再通过我们实现的`UserDetailImpl`和`UserDetailServiceImpl`两个类与数据库中信息进行匹配并返回登录结果，授予权限。
+
+- 我们希望添加用户时，用户写入数据库的密码就是密文，使得即使数据库被破解，用户密码也不会遭到泄露，修改`UserController`类中的`addUser`函数为
+
+  ```java
+  @GetMapping("/user/add/{userId}/{username}/{password}/")
+  public String addUser(@PathVariable int userId,
+                        @PathVariable String username,
+                        @PathVariable String password) {
+  
+      PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+      String encodedPassword = passwordEncoder.encode(password);
+      User user = new User(userId, username, encodedPassword);
+      userMapper.insert(user);
+      return "Add User Successfully";
+  }
+  ```
+
+### 将Session控制登录方式改为Token控制
+
